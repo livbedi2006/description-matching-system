@@ -1,0 +1,9 @@
+{
+  "val_f1": 0.7742,
+  "val_roc_auc": 0.8733,
+  "pipeline_stages": [
+    "feature_engineer",
+    "preprocessor",
+    "classifier"
+  ]
+}

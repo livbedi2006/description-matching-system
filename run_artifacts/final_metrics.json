@@ -1,0 +1,7 @@
+{
+  "default_lr_test_f1": 0.8,
+  "tuned_lr_test_f1": 0.6897,
+  "tuned_rf_test_f1": 0.6792,
+  "winner": "tuned_lr",
+  "best_threshold": 0.082
+}
