@@ -4,6 +4,7 @@ import joblib
 import json
 import os
 import warnings
+from ml_utils import check_dependencies, validate_data, safe_fit, safe_search, log_execution
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -26,6 +27,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(PROJECT_ROOT, "data", "clean_modelling_table.csv")
 ARTIFACTS_DIR = os.path.join(PROJECT_ROOT, "run_artifacts")
 os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
+# ── 0. Dependency and data validation ─────────────────────────
+print("Checking dependencies...")
+check_dependencies()
+print("Dependencies OK")
 
 # ── 1. Load data ─────────────────────────────────────────────
 df = pd.read_csv(DATA_PATH)
@@ -366,3 +372,306 @@ print(f"\nWinner: {winner_name}")
 print(f"Saved: best_pipeline.joblib")
 print(f"Saved: final_metrics.json")
 print(f"\nAll artifacts saved to: {ARTIFACTS_DIR}")
+
+
+# ============================================================
+# TASK 10 — COMPLEX RELATIONSHIPS
+# ============================================================
+# WHAT THIS DOES:
+# Tests whether non-linear models capture structure linear models miss.
+# Compares linear baseline vs Gradient Boosting with validated lift
+# and partial dependence plots to prove real structure learning.
+
+print("\n" + "="*60)
+print("TASK 10: Complex Relationships")
+print("="*60)
+
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.inspection import PartialDependenceDisplay
+
+# Use the same train/val/test splits from earlier
+# Compare linear baseline (Logistic Regression) vs non-linear (Gradient Boosting)
+
+# Linear baseline (already trained earlier as 'model')
+linear_baseline = model
+linear_test_f1 = f1_score(y_test, linear_baseline.predict(X_test_t), zero_division=0)
+
+# Non-linear challenger: Gradient Boosting with CV tuning
+gb_param_grid = {
+    "n_estimators": [100, 200],
+    "max_depth": [2, 3, 4],
+    "learning_rate": [0.05, 0.1],
+    "min_samples_leaf": [5, 15],
+}
+
+gb_search = GridSearchCV(
+    GradientBoostingClassifier(random_state=42),
+    gb_param_grid,
+    scoring="f1",
+    cv=cv,
+    refit=True,
+    n_jobs=-1,
+    verbose=1,
+)
+gb_search.fit(X_train_t, y_train)
+
+gb_model = gb_search.best_estimator_
+gb_test_f1 = f1_score(y_test, gb_model.predict(X_test_t), zero_division=0)
+
+print(f"\nLinear baseline test F1: {linear_test_f1:.4f}")
+print(f"Gradient Boosting test F1: {gb_test_f1:.4f}")
+print(f"Lift from non-linear model: {gb_test_f1 - linear_test_f1:+.4f}")
+
+# Partial dependence plots to show what the model learned
+if gb_test_f1 > linear_test_f1:
+    print("\nGenerating partial dependence plots...")
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Get feature names from preprocessor
+    numeric_feature_names = NUMERIC_COLS
+    categorical_feature_names = list(preprocessor.named_transformers_["cat"]
+                                     .named_steps["encoder"]
+                                     .get_feature_names_out(CATEGORICAL_COLS))
+    all_feature_names = numeric_feature_names + categorical_feature_names
+    
+    # Plot top 6 most important features
+    feature_importance = gb_model.feature_importances_
+    top_indices = np.argsort(feature_importance)[-6:][::-1]
+    top_features = [all_feature_names[i] for i in top_indices]
+    
+    PartialDependenceDisplay.from_estimator(
+        gb_model, X_train_t, features=top_indices, feature_names=all_feature_names, ax=ax
+    )
+    plt.tight_layout()
+    plt.savefig(os.path.join(ARTIFACTS_DIR, "partial_dependence_plots.png"), dpi=150)
+    print("Saved: partial_dependence_plots.png")
+else:
+    print("\nLinear baseline performs better - skipping partial dependence plots")
+
+joblib.dump(gb_model, os.path.join(ARTIFACTS_DIR, "gradient_boosting_model.joblib"))
+print("Saved: gradient_boosting_model.joblib")
+
+
+# ============================================================
+# TASK 11 — ENSEMBLE LEARNING
+# ============================================================
+# WHAT THIS DOES:
+# Combines multiple diverse models for robust predictions.
+# Measures diversity between base models and documents latency cost.
+
+print("\n" + "="*60)
+print("TASK 11: Ensemble Learning")
+print("="*60)
+
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import VotingClassifier, StackingClassifier
+from sklearn.pipeline import make_pipeline
+import time
+
+# Choose genuinely diverse base models (different algorithm families)
+base_models = {
+    "logistic_regression": make_pipeline(
+        StandardScaler(with_mean=False), 
+        LogisticRegression(max_iter=1000, random_state=42)
+    ),
+    "decision_tree": DecisionTreeClassifier(max_depth=6, min_samples_leaf=10, random_state=42),
+    "knn": make_pipeline(
+        StandardScaler(with_mean=False),
+        KNeighborsClassifier(n_neighbors=15)
+    ),
+    "naive_bayes": GaussianNB(),
+}
+
+estimators = list(base_models.items())
+
+# Voting ensemble (soft voting)
+voting_ensemble = VotingClassifier(estimators=estimators, voting="soft", n_jobs=-1)
+voting_ensemble.fit(X_train_t, y_train)
+voting_test_f1 = f1_score(y_test, voting_ensemble.predict(X_test_t), zero_division=0)
+
+# Stacking ensemble with cross-validation to prevent leakage
+stacking_ensemble = StackingClassifier(
+    estimators=estimators,
+    final_estimator=LogisticRegression(max_iter=1000, random_state=42),
+    cv=cv,
+    n_jobs=-1,
+)
+stacking_ensemble.fit(X_train_t, y_train)
+stacking_test_f1 = f1_score(y_test, stacking_ensemble.predict(X_test_t), zero_division=0)
+
+print(f"\nVoting ensemble test F1: {voting_test_f1:.4f}")
+print(f"Stacking ensemble test F1: {stacking_test_f1:.4f}")
+
+# Diversity check: how often do base models disagree?
+print("\nDiversity analysis:")
+preds = {name: m.fit(X_train_t, y_train).predict(X_test_t) for name, m in base_models.items()}
+names = list(preds.keys())
+disagreements = []
+for i in range(len(names)):
+    for j in range(i + 1, len(names)):
+        disagreement_rate = np.mean(preds[names[i]] != preds[names[j]])
+        disagreements.append(disagreement_rate)
+        print(f"  {names[i]} vs {names[j]}: {disagreement_rate:.1%} disagreement")
+
+print(f"Average pairwise disagreement: {np.mean(disagreements):.1%}")
+
+# Measure latency cost
+def measure_latency(model, X, n_repeats=50):
+    start = time.perf_counter()
+    for _ in range(n_repeats):
+        model.predict(X)
+    return (time.perf_counter() - start) / n_repeats / len(X) * 1000  # ms/sample
+
+single_ms = measure_latency(base_models["naive_bayes"], X_test_t)
+voting_ms = measure_latency(voting_ensemble, X_test_t)
+stacking_ms = measure_latency(stacking_ensemble, X_test_t)
+
+print(f"\nLatency analysis:")
+print(f"  Single model (Naive Bayes): {single_ms:.3f} ms/sample")
+print(f"  Voting ensemble: {voting_ms:.3f} ms/sample ({(voting_ms/single_ms - 1)*100:.1f}% overhead)")
+print(f"  Stacking ensemble: {stacking_ms:.3f} ms/sample ({(stacking_ms/single_ms - 1)*100:.1f}% overhead)")
+
+# Save the best ensemble
+best_ensemble = voting_ensemble if voting_test_f1 >= stacking_test_f1 else stacking_ensemble
+best_ensemble_name = "voting" if voting_test_f1 >= stacking_test_f1 else "stacking"
+joblib.dump(best_ensemble, os.path.join(ARTIFACTS_DIR, f"{best_ensemble_name}_ensemble.joblib"))
+print(f"\nBest ensemble: {best_ensemble_name}")
+print(f"Saved: {best_ensemble_name}_ensemble.joblib")
+
+
+# ============================================================
+# TASK 12 — BINARY CLASSIFICATION
+# ============================================================
+# WHAT THIS DOES:
+# Ships a production-grade classifier with calibration,
+# cost-justified threshold, fairness checks, and serving package.
+
+print("\n" + "="*60)
+print("TASK 12: Binary Classification (Production-Ready)")
+print("="*60)
+
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import brier_score_loss
+from sklearn.model_selection import cross_val_predict
+
+# Select the best model from previous tasks for production
+# Use the winner from Task 9 (hyperparameter tuning)
+production_model = winner
+
+# Split validation set further for calibration
+X_cal_fit, X_cal_val, y_cal_fit, y_cal_val = train_test_split(
+    X_v, y_v, test_size=0.4, stratify=y_v, random_state=42
+)
+
+# Calibration: choose method by evidence, not assumption
+print("\nCalibration analysis:")
+candidate_scores = {}
+for method in ("isotonic", "sigmoid"):
+    try:
+        cand = CalibratedClassifierCV(production_model, method=method, cv="prefit")
+        cand.fit(X_cal_fit, y_cal_fit)
+        cal_proba = cand.predict_proba(X_cal_val)[:, 1]
+        candidate_scores[method] = brier_score_loss(y_cal_val, cal_proba)
+        print(f"  {method}: Brier score = {candidate_scores[method]:.4f}")
+    except Exception as e:
+        print(f"  {method}: Failed - {e}")
+        candidate_scores[method] = float("inf")
+
+chosen_method = min(candidate_scores, key=candidate_scores.get)
+print(f"Chosen calibration method: {chosen_method}")
+
+# Refit on full calibration set
+calibrated_model = CalibratedClassifierCV(production_model, method=chosen_method, cv="prefit")
+calibrated_model.fit(X_v, y_v)
+
+# Cost-justified threshold selection (using cross-validation on training set)
+COST_FALSE_NEGATIVE = 5.0
+COST_FALSE_POSITIVE = 1.0
+
+print(f"\nThreshold selection (cost: FN={COST_FALSE_NEGATIVE}x, FP={COST_FALSE_POSITIVE}x)")
+
+# Use out-of-fold predictions from training set for threshold selection
+# Use raw features (X_tr) since production_model is a pipeline that includes preprocessing
+oof_proba = cross_val_predict(production_model, X_tr, y_tr, cv=cv, method="predict_proba")[:, 1]
+
+thresholds = np.linspace(0.01, 0.99, 99)
+costs = []
+for t in thresholds:
+    pred = (oof_proba >= t).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_tr, pred).ravel()
+    costs.append(fp * COST_FALSE_POSITIVE + fn * COST_FALSE_NEGATIVE)
+
+best_threshold_idx = np.argmin(costs)
+best_threshold = thresholds[best_threshold_idx]
+min_cost = costs[best_threshold_idx]
+
+print(f"Optimal threshold: {best_threshold:.3f}")
+print(f"Minimum cost: {min_cost:.0f}")
+
+# Fairness check across segments
+print("\nFairness analysis by education level:")
+education_levels = X_test["education_level"].unique() if "education_level" in X_test.columns else ["Unknown"]
+fairness_scores = {}
+
+for edu_level in education_levels:
+    if pd.isna(edu_level):
+        continue
+    mask = X_test["education_level"] == edu_level
+    if mask.sum() < 5:  # Skip segments with too few samples
+        continue
+    y_seg = y_test[mask]
+    pred_seg = calibrated_model.predict(X_test_t[mask])
+    seg_f1 = f1_score(y_seg, pred_seg, zero_division=0)
+    fairness_scores[edu_level] = seg_f1
+    print(f"  {edu_level}: F1 = {seg_f1:.4f} (n={mask.sum()})")
+
+if fairness_scores:
+    fairness_gap = max(fairness_scores.values()) - min(fairness_scores.values())
+    print(f"Fairness gap: {fairness_gap:.4f}")
+else:
+    print("No segments with sufficient samples for fairness analysis")
+
+# Package for serving with model + threshold + cost assumptions
+production_package = {
+    "model": calibrated_model,
+    "threshold": best_threshold,
+    "cost_assumptions": {
+        "false_negative": COST_FALSE_NEGATIVE,
+        "false_positive": COST_FALSE_POSITIVE
+    },
+    "calibration_method": chosen_method,
+    "fairness_scores": fairness_scores,
+}
+
+joblib.dump(production_package, os.path.join(ARTIFACTS_DIR, "production_model_package.joblib"))
+print("\nSaved: production_model_package.joblib")
+
+# Final evaluation on test set with calibrated model and optimal threshold
+final_proba = calibrated_model.predict_proba(X_test_t)[:, 1]
+final_pred = (final_proba >= best_threshold).astype(int)
+final_f1 = f1_score(y_test, final_pred, zero_division=0)
+final_auc = roc_auc_score(y_test, final_proba)
+
+print(f"\nFinal production model test performance:")
+print(f"  F1 score: {final_f1:.4f}")
+print(f"  ROC-AUC: {final_auc:.4f}")
+print(f"  Threshold: {best_threshold:.3f}")
+
+# Save final metrics
+task12_metrics = {
+    "calibration_method": chosen_method,
+    "optimal_threshold": round(float(best_threshold), 3),
+    "final_test_f1": round(float(final_f1), 4),
+    "final_test_auc": round(float(final_auc), 4),
+    "cost_assumptions": {
+        "false_negative": COST_FALSE_NEGATIVE,
+        "false_positive": COST_FALSE_POSITIVE
+    },
+    "fairness_scores": {str(k): float(v) for k, v in fairness_scores.items()},
+}
+
+with open(os.path.join(ARTIFACTS_DIR, "task12_production_metrics.json"), "w") as f:
+    json.dump(task12_metrics, f, indent=2)
+print("Saved: task12_production_metrics.json")
