@@ -6,13 +6,14 @@ A machine learning-powered system that matches job applicants to job description
 
 This system analyzes student profiles and job descriptions to determine optimal matches for recruitment purposes. It uses skill-based scoring to evaluate the fit between candidates and job requirements, employing advanced ML techniques including:
 
-- **Preprocessing Pipeline**: Data leakage prevention with proper train/val/test splits
-- **Feature Engineering**: Domain-driven features (skill gaps, experience gaps, education adequacy)
-- **Model Selection**: Logistic Regression, Random Forest, Gradient Boosting with hyperparameter tuning
-- **Complex Relationships**: Non-linear modeling with partial dependence analysis
-- **Ensemble Learning**: Voting and Stacking ensembles with diversity analysis
-- **Production-Ready Classification**: Model calibration, cost-justified thresholds, fairness checks
-- **Binary Decision Analysis**: Cost-optimal threshold selection for business metrics
+- **Preprocessing Pipeline**: Data leakage prevention with proper train/val/test splits and fitted preprocessing on training data only
+- **Feature Engineering**: Domain-driven features including skill gaps, experience gaps, and education adequacy
+- **Model Selection**: Multiple model types including Logistic Regression, Random Forest, and Gradient Boosting with hyperparameter tuning
+- **Non-Linear Modeling**: Gradient Boosting to capture complex relationships that linear models might miss
+- **Ensemble Methods**: Voting and Stacking ensembles combining diverse model families for robust predictions
+- **Model Calibration**: Isotonic and sigmoid calibration to ensure reliable probability estimates
+- **Cost-Optimized Decision Thresholds**: Business-driven threshold selection based on false positive/negative cost ratios
+- **Fairness Analysis**: Segment-level performance evaluation to ensure consistent model behavior across groups
 - **End-to-End Pipeline**: Complete sklearn pipeline for production deployment
 
 ## Dataset
@@ -60,19 +61,19 @@ Processed dataset ready for machine learning model training, with joined student
 │   ├── ml_utils.py                   # ML utilities (dependency checking, validation)
 │   ├── model.py                      # Model definitions
 │   ├── train.py                      # Basic training harness
-│   └── train_advanced.py             # Advanced ML pipeline (tasks 4-12)
+│   └── train_advanced.py             # Advanced ML pipeline with all techniques
 └── run_artifacts/                     # Trained model artifacts
     ├── best_pipeline.joblib          # Best performing model
     ├── fitted_preprocessor.joblib    # Preprocessing pipeline
     ├── pipeline.joblib               # End-to-end pipeline
-    ├── gradient_boosting_model.joblib # Task 10 non-linear model
-    ├── stacking_ensemble.joblib      # Task 11 ensemble model
-    ├── production_model_package.joblib # Task 12 production-ready model
+    ├── gradient_boosting_model.joblib # Non-linear model
+    ├── stacking_ensemble.joblib      # Ensemble model
+    ├── production_model_package.joblib # Production-ready model with calibration
     ├── roc_pr_curves.png             # ROC/PR curve visualizations
-    ├── partial_dependence_plots.png  # Task 10 feature importance plots
+    ├── partial_dependence_plots.png  # Feature importance plots
     ├── run_metrics.json              # Validation metrics
     ├── final_metrics.json            # Test set comparison
-    └── task12_production_metrics.json # Production model metrics
+    └── production_metrics.json       # Production model metrics
 ```
 
 ## Installation
@@ -112,20 +113,25 @@ This runs the baseline skill overlap model and logs results to `experiment_log.c
 
 ### Advanced ML Pipeline
 
-Run the complete ML pipeline with preprocessing, feature engineering, hyperparameter tuning, and production-ready modeling:
+Run the complete ML pipeline with preprocessing, feature engineering, hyperparameter tuning, ensemble methods, and production-ready modeling:
 ```bash
 python src/train_advanced.py
 ```
 
-This will execute the complete pipeline (Tasks 4-12):
-1. **Tasks 4-6**: Data preprocessing, Logistic Regression baseline, binary decision analysis
-2. **Task 7**: Feature engineering with domain knowledge
-3. **Task 8**: End-to-end pipeline construction
-4. **Task 9**: Hyperparameter tuning (Logistic Regression + Random Forest)
-5. **Task 10**: Complex relationships analysis (Gradient Boosting vs linear baseline)
-6. **Task 11**: Ensemble learning (Voting + Stacking with diversity analysis)
-7. **Task 12**: Production-ready classification (calibration, cost-justified thresholds, fairness checks)
-8. Save all artifacts to `run_artifacts/`
+This will execute the complete pipeline:
+1. Data preprocessing with train/val/test splits and fitted preprocessing on training data only
+2. Logistic Regression baseline model training
+3. Binary decision analysis with cost-optimal thresholds
+4. Feature engineering with domain knowledge (skill gaps, experience gaps, education adequacy)
+5. End-to-end pipeline construction
+6. Hyperparameter tuning for Logistic Regression and Random Forest
+7. Non-linear modeling with Gradient Boosting and partial dependence analysis
+8. Ensemble learning with Voting and Stacking methods, including diversity analysis
+9. Model calibration (isotonic and sigmoid methods)
+10. Cost-justified threshold selection
+11. Fairness analysis across segments
+12. Production model packaging with calibration and threshold metadata
+13. Save all artifacts to `run_artifacts/`
 
 ### Using Trained Models
 
@@ -150,7 +156,7 @@ predictions = pipeline.predict(new_data)
 probabilities = pipeline.predict_proba(new_data)[:, 1]
 ```
 
-### Using Production-Ready Model (Task 12)
+### Using Production-Ready Model
 
 Load the production package with calibrated model and optimal threshold:
 ```python
@@ -171,26 +177,26 @@ print(f"Fairness scores: {pkg['fairness_scores']}")
 
 ## Model Performance
 
-### Test Set Results (Tasks 4-9)
+### Test Set Results
 
 - **Default Logistic Regression**: F1 = 0.8000
 - **Tuned Logistic Regression**: F1 = 0.6897
 - **Tuned Random Forest**: F1 = 0.6792
 
-### Task 10 - Complex Relationships
+### Non-Linear Modeling Results
 
 - **Linear Baseline**: F1 = 0.8000
 - **Gradient Boosting**: F1 = 0.6792
 - **Finding**: Linear baseline performed better (no significant non-linear relationships in this dataset)
 
-### Task 11 - Ensemble Learning
+### Ensemble Learning Results
 
 - **Voting Ensemble**: F1 = 0.7333
 - **Stacking Ensemble**: F1 = 0.7636
 - **Diversity**: 23.3% average pairwise disagreement between base models
 - **Latency Overhead**: ~7000% for ensembles vs single model
 
-### Task 12 - Production-Ready Classification
+### Production-Ready Model Results
 
 - **Calibration Method**: Isotonic (Brier score: 0.0954)
 - **Cost-Optimized Threshold**: Selected via cross-validation on training set
