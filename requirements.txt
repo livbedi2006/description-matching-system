@@ -1,0 +1,9 @@
+pandas>=1.0.0
+numpy>=1.18.0
+scikit-learn>=0.24.0
+joblib>=0.14.0
+matplotlib>=3.0.0
+pydantic>=2.0.0
+fastapi>=0.68.0
+uvicorn>=0.15.0
+packaging>=21.0

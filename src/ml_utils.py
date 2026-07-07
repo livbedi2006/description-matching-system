@@ -6,8 +6,13 @@ Provides failure fallback, dependency validation, and data quality checks.
 """
 
 import importlib
+import logging
 import numpy as np
 from packaging import version
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+log = logging.getLogger("ml_utils")
 
 REQUIRED_PACKAGES = {
     "pandas": "1.0.0",
@@ -21,21 +26,27 @@ def check_dependencies():
     """
     Fails fast with a clear message if a required package is missing
     or too old, instead of a confusing stack trace mid-pipeline.
+    Returns dict of installed versions.
     """
     problems = []
+    versions = {}
     for pkg, min_version in REQUIRED_PACKAGES.items():
         try:
             module = importlib.import_module(pkg)
             installed = getattr(module, "__version__", "unknown")
+            versions[pkg] = installed
             if installed != "unknown" and version.parse(installed) < version.parse(min_version):
                 problems.append(f"{pkg} {installed} < required {min_version}")
         except ImportError:
             problems.append(f"{pkg} is not installed")
     
     if problems:
+        for p in problems:
+            log.error("Dependency check failed: %s", p)
         raise RuntimeError("Missing/incompatible dependencies: " + "; ".join(problems))
     
-    return True
+    log.info("Dependency check passed: %s", versions)
+    return versions
 
 
 def validate_data(X, y, min_samples_per_class=10):
