@@ -1,0 +1,15 @@
+{
+  "model_version": "v1.0.0",
+  "reference_metrics": {
+    "test_f1": 0.8015873015873016,
+    "test_accuracy": 0.9166666666666666,
+    "test_auc": 0.9204406742996647
+  },
+  "n_test_records": 600,
+  "dependency_versions": {
+    "pandas": "2.2.3",
+    "numpy": "2.2.5",
+    "sklearn": "1.6.1",
+    "joblib": "1.5.0"
+  }
+}
