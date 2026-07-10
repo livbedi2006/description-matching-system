@@ -1,4 +1,4 @@
-﻿"""Live HTTP edge-case checks for the running Task 13 scoring container.
+"""Live HTTP edge-case checks for the running Task 13 scoring container.
 
 Start the container first, then run:
     python src/edge_case_tests_api.py
@@ -61,7 +61,10 @@ def sample_payloads():
     def payload(row, record_id):
         return {
             "record_id": record_id,
-            "features": {name: row[name] for name in FEATURE_NAMES},
+            "features": {
+                name: (row[name].item() if hasattr(row[name], "item") else row[name])
+                for name in FEATURE_NAMES
+            },
         }
     return payload(data.iloc[0], "test_001"), payload(data.iloc[1], "test_002")
 

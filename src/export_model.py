@@ -1,4 +1,4 @@
-﻿"""Export a deployable, versioned model package for the Task 13 API."""
+"""Export a deployable, versioned model package for the Task 13 API."""
 
 from __future__ import annotations
 
@@ -22,16 +22,13 @@ METADATA_PATH = ARTIFACTS_DIR / "model_metadata.json"
 
 
 def _select_source_artifact() -> Path:
-    """Prefer Task 12's calibrated package, with a documented baseline fallback."""
-    candidates = [
-        ARTIFACTS_DIR / "production_model_package.joblib",
-        ARTIFACTS_DIR / "best_pipeline.joblib",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+    """Return the calibrated Task 12 production package required for serving."""
+    candidate = ARTIFACTS_DIR / "production_model_package.joblib"
+    if candidate.exists():
+        return candidate
     raise FileNotFoundError(
-        "No deployable model found. Run src/train_advanced.py before exporting the API package."
+        "Calibrated production package not found. Run src/train_advanced.py before "
+        "exporting the Task 13 API package."
     )
 
 

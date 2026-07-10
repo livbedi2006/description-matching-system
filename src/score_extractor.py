@@ -1,4 +1,4 @@
-﻿"""Validated, versioned score extraction for the description-matching model."""
+"""Validated, versioned score extraction for the description-matching model."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ CATEGORICAL_COLS = [
 
 FEATURE_NAMES = NUMERIC_COLS + CATEGORICAL_COLS
 DEFAULT_THRESHOLD = 0.5
-DEFAULT_SCORE_MEANING = "probability that the application is a good match (positive class)"
+DEFAULT_SCORE_MEANING = "calibrated probability that the application is a good match (positive class)"
 
 
 class ScoringError(ValueError):
