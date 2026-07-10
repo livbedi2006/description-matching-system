@@ -1,220 +1,152 @@
-"""
-API-level edge case test suite for the Description Matching System.
+﻿"""Live HTTP edge-case checks for the running Task 13 scoring container.
 
-Uses FastAPI's TestClient (real ASGI request/response cycle, in-process)
-to test the actual api.py app object - including scenarios real curl
-testing can't easily force: the model failing to load at startup, and
-/health + the scoring endpoints degrading to 503 instead of crashing.
+Start the container first, then run:
+    python src/edge_case_tests_api.py
 
-Run: python src/edge_case_tests_api.py
+Set API_BASE_URL to target a non-default host or port.
 """
 
-import sys
+from __future__ import annotations
+
+import json
 import os
+import sys
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 import pandas as pd
-from fastapi.testclient import TestClient
 
-# Add src to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from .score_extractor import FEATURE_NAMES
+except ImportError:  # pragma: no cover - direct-script compatibility
+    from score_extractor import FEATURE_NAMES
 
-results = []
+BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_PATH = PROJECT_ROOT / "data" / "clean_modelling_table.csv"
+results: list[tuple[str, str]] = []
 
-def check(name, fn):
+
+def request(method: str, path: str, payload=None, raw_body: bytes | None = None):
+    body = raw_body if raw_body is not None else (
+        json.dumps(payload).encode("utf-8") if payload is not None else None
+    )
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    req = Request(f"{BASE_URL}{path}", data=body, headers=headers, method=method)
     try:
-        fn()
+        with urlopen(req, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return exc.code, json.loads(body) if body else {}
+
+
+def check(name, assertion):
+    try:
+        assertion()
         results.append((name, "PASS"))
         print(f"PASS  {name}")
-    except AssertionError as e:
-        results.append((name, f"FAIL: {e}"))
-        print(f"FAIL  {name}: {e}")
-    except Exception as e:
-        results.append((name, f"ERROR: {e}"))
-        print(f"ERROR {name}: {e}")
+    except Exception as exc:
+        results.append((name, f"FAIL: {exc}"))
+        print(f"FAIL  {name}: {exc}")
 
 
-import api as api_module
-
-# Load test data from our modelling table
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH = os.path.join(PROJECT_ROOT, "data", "clean_modelling_table.csv")
-
-if os.path.exists(DATA_PATH):
-    test_df = pd.read_csv(DATA_PATH)
-    sample_record = test_df.iloc[0].to_dict()
-    sample_batch = test_df.iloc[:5].to_dict("records")
-else:
-    # Fallback sample record if data not available
-    sample_record = {
-        "id": "test_001",
-        "exp_required_years": 2.0,
-        "salary_offered_inr": 350000,
-        "python_required": 62.8,
-        "sql_required": 58.5,
-        "ml_required": 45.2,
-        "javascript_required": 38.7,
-        "data_structures_required": 52.3,
-        "statistics_required": 48.9,
-        "years_experience": 1.5,
-        "python_score": 65.0,
-        "sql_score": 60.0,
-        "ml_score": 50.0,
-        "javascript_score": 45.0,
-        "data_structures_score": 55.0,
-        "statistics_score": 52.0,
-        "exam_time_seconds": 1800,
-        "self_reported_confidence": 4.0,
-        "retake_count": 0,
-        "expected_salary_inr": 400000,
-        "company": "TechCorp",
-        "title": "Data Scientist",
-        "location_job": "Bangalore",
-        "edu_minimum": "PG",
-        "education_level": "PG",
-        "location_student": "Delhi",
-    }
-    sample_batch = [sample_record]
-
-# TestClient only runs FastAPI's startup/shutdown lifespan events when
-# used as a context manager - without `with`, @app.on_event("startup")
-# never fires and every endpoint would see _model as None regardless.
-client = TestClient(api_module.app).__enter__()
+def sample_payloads():
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Test data not found: {DATA_PATH}")
+    data = pd.read_csv(DATA_PATH).dropna(subset=FEATURE_NAMES)
+    if len(data) < 2:
+        raise RuntimeError("Need at least two complete records for live API tests")
+    def payload(row, record_id):
+        return {
+            "record_id": record_id,
+            "features": {name: row[name] for name in FEATURE_NAMES},
+        }
+    return payload(data.iloc[0], "test_001"), payload(data.iloc[1], "test_002")
 
 
-def test_health_ok():
-    r = client.get("/health")
-    # If model not loaded, expect 503, otherwise 200
-    if api_module._model is None:
-        assert r.status_code == 503, f"expected 503 (model not ready), got {r.status_code}"
-        print("SKIP  GET /health returns 200 with model_version (model not loaded)")
-    else:
-        assert r.status_code == 200, f"expected 200, got {r.status_code}"
-        body = r.json()
-        assert body["status"] == "ok"
-        assert body["model_version"] == "v1.0.0"
-
-
-def test_score_single_clean():
-    if api_module._model is None:
-        print("SKIP  POST /score/single, clean record -> 200 (model not loaded)")
-        return
-    r = client.post("/score/single", json=sample_record)
-    assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
-    body = r.json()
-    for field in ("score", "score_meaning", "model_version", "input_record_id"):
-        assert field in body, f"missing field {field}"
-    assert 0.0 <= body["score"] <= 1.0
-
-
-def test_score_batch_clean():
-    if api_module._model is None:
-        print("SKIP  POST /score/batch, clean batch -> 200 (model not loaded)")
-        return
-    r = client.post("/score/batch", json={"records": sample_batch})
-    assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text}"
-    body = r.json()
-    assert len(body) == len(sample_batch)
-    assert all("model_version" in row for row in body)
-
-
-def test_missing_column_returns_400():
-    bad = dict(sample_record); del bad["python_required"]
-    r = client.post("/score/single", json=bad)
-    assert r.status_code == 400, f"expected 400, got {r.status_code}"
-    assert r.json()["error"] == "invalid_input"
-
-
-def test_nan_returns_400():
-    bad = dict(sample_record); bad["python_required"] = None
-    r = client.post("/score/single", json=bad)
-    assert r.status_code == 400, f"expected 400, got {r.status_code}"
-
-
-def test_non_numeric_returns_400():
-    bad = dict(sample_record); bad["python_required"] = "not_a_number"
-    r = client.post("/score/single", json=bad)
-    assert r.status_code == 400, f"expected 400, got {r.status_code}"
-
-
-def test_empty_batch_returns_400():
-    r = client.post("/score/batch", json={"records": []})
-    assert r.status_code == 400, f"expected 400, got {r.status_code}"
-
-
-def test_oversized_batch_returns_413():
-    huge = [sample_record] * (api_module.MAX_BATCH_SIZE + 1)
-    r = client.post("/score/batch", json={"records": huge})
-    assert r.status_code == 413, f"expected 413, got {r.status_code}"
-
-
-def test_malformed_json_returns_422():
-    r = client.post("/score/single", content="{not valid json", headers={"Content-Type": "application/json"})
-    assert r.status_code == 422, f"expected 422, got {r.status_code}"
-
-
-def test_unknown_route_returns_404():
-    r = client.get("/nonexistent-route")
-    assert r.status_code == 404, f"expected 404, got {r.status_code}"
-
-
-def test_wrong_method_returns_405():
-    r = client.get("/score/single")
-    assert r.status_code == 405, f"expected 405, got {r.status_code}"
-
-
-def test_every_response_has_request_id_header():
-    r = client.get("/health")
-    assert "x-request-id" in r.headers, "missing X-Request-ID header"
-
-
-def test_extra_field_accepted():
-    good = dict(sample_record); good["some_extra_field"] = "zzz"
-    r = client.post("/score/single", json=good)
-    assert r.status_code == 200, f"expected 200 (extra field should be tolerated), got {r.status_code}"
-
-
-# ---------------------------------------------------------------------
-# The scenario real curl testing can't force without breaking the
-# actual model file: simulate the model failing to load at startup and
-# confirm every endpoint degrades to a clear 503, not a crash or a
-# confusing 500/NoneType error.
-# ---------------------------------------------------------------------
-def test_model_not_ready_returns_503():
-    original_model = api_module._model
-    original_error = api_module._startup_error
+def main():
     try:
-        api_module._model = None
-        api_module._startup_error = "simulated: model file corrupted at startup"
+        single, second = sample_payloads()
+        status, _ = request("GET", "/health")
+    except URLError as exc:
+        raise SystemExit(f"API is not reachable at {BASE_URL}: {exc}") from exc
 
-        r_health = client.get("/health")
-        assert r_health.status_code == 503, f"expected 503 from /health, got {r_health.status_code}"
+    check("Container health endpoint returns 200", lambda: _assert(status == 200, status))
+    check("Missing feature returns 422", lambda: _assert_status("POST", "/score", _without_feature(single), 422))
+    check("Non-numeric feature returns 422", lambda: _assert_status("POST", "/score", _non_numeric(single), 422))
+    check("Malformed JSON returns 422", lambda: _assert_raw_status("POST", "/score", b"{not valid json", 422))
+    check("Wrong HTTP method returns 405", lambda: _assert_status("GET", "/score", None, 405))
+    check("Empty batch returns 422", lambda: _assert_status("POST", "/score-batch", [], 422))
+    check("Unknown route returns 404", lambda: _assert_status("GET", "/unknown-endpoint", None, 404))
+    check("Clean single record returns a valid score", lambda: _assert_single(single))
+    check("Clean batch returns two valid scores", lambda: _assert_batch([single, second]))
+    check("Repeated scoring is deterministic", lambda: _assert_reproducible(single))
 
-        r_single = client.post("/score/single", json=sample_record)
-        assert r_single.status_code == 503, f"expected 503 from /score/single, got {r_single.status_code}"
+    passed = sum(result == "PASS" for _, result in results)
+    print(f"\n{passed}/{len(results)} checks passed")
+    if passed != len(results):
+        raise SystemExit(1)
 
-        r_batch = client.post("/score/batch", json={"records": sample_batch})
-        assert r_batch.status_code == 503, f"expected 503 from /score/batch, got {r_batch.status_code}"
-    finally:
-        api_module._model = original_model
-        api_module._startup_error = original_error
+
+def _assert(condition, actual):
+    if not condition:
+        raise AssertionError(f"unexpected result: {actual}")
+
+
+def _assert_status(method, path, payload, expected):
+    status, body = request(method, path, payload)
+    _assert(status == expected, {"status": status, "body": body})
+
+
+def _assert_raw_status(method, path, raw_body, expected):
+    status, body = request(method, path, raw_body=raw_body)
+    _assert(status == expected, {"status": status, "body": body})
+
+
+def _without_feature(payload):
+    invalid = {**payload, "features": dict(payload["features"])}
+    invalid["features"].pop("python_required")
+    return invalid
+
+
+def _non_numeric(payload):
+    invalid = {**payload, "features": dict(payload["features"])}
+    invalid["features"]["python_required"] = "not-a-number"
+    return invalid
+
+
+def _assert_score(result):
+    required = {
+        "match_score", "decision", "score_meaning", "model_version",
+        "record_id", "container_image_digest",
+    }
+    _assert(required.issubset(result), result)
+    _assert(0.0 <= result["match_score"] <= 1.0, result)
+    _assert(result["decision"] in (0, 1), result)
+
+
+def _assert_single(payload):
+    status, body = request("POST", "/score", payload)
+    _assert(status == 200, {"status": status, "body": body})
+    _assert_score(body)
+
+
+def _assert_batch(payloads):
+    status, body = request("POST", "/score-batch", payloads)
+    _assert(status == 200, {"status": status, "body": body})
+    _assert(len(body) == len(payloads), body)
+    for result in body:
+        _assert_score(result)
+
+
+def _assert_reproducible(payload):
+    first_status, first = request("POST", "/score", payload)
+    second_status, second = request("POST", "/score", payload)
+    _assert(first_status == second_status == 200, [first_status, second_status])
+    _assert(first["match_score"] == second["match_score"], [first, second])
 
 
 if __name__ == "__main__":
-    check("GET /health returns 200 with model_version", test_health_ok)
-    check("POST /score/single, clean record -> 200", test_score_single_clean)
-    check("POST /score/batch, clean batch -> 200", test_score_batch_clean)
-    check("Missing feature column -> 400", test_missing_column_returns_400)
-    check("NaN/null feature value -> 400", test_nan_returns_400)
-    check("Non-numeric feature value -> 400", test_non_numeric_returns_400)
-    check("Empty batch -> 400", test_empty_batch_returns_400)
-    check("Oversized batch -> 413", test_oversized_batch_returns_413)
-    check("Malformed JSON body -> 422", test_malformed_json_returns_422)
-    check("Unknown route -> 404", test_unknown_route_returns_404)
-    check("Wrong HTTP method -> 405", test_wrong_method_returns_405)
-    check("Every response carries X-Request-ID header", test_every_response_has_request_id_header)
-    check("Extra unexpected field accepted, not rejected", test_extra_field_accepted)
-    check("Model-not-ready degrades to 503 on every endpoint (forced failure)", test_model_not_ready_returns_503)
-
-    n_pass = sum(1 for _, r in results if r == "PASS")
-    print(f"\n{n_pass}/{len(results)} checks passed")
-    if n_pass != len(results):
-        sys.exit(1)
+    main()

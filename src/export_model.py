@@ -1,81 +1,79 @@
-"""
-Export the trained model as a versioned artifact for the scoring interface.
+﻿"""Export a deployable, versioned model package for the Task 13 API."""
 
-This script loads the best model from the training pipeline and exports it
-in the format expected by score_extractor.py, including:
-- The fitted model
-- Model version
-- Feature names
-- Score meaning
-"""
+from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import joblib
-import os
 
-from ml_utils import check_dependencies, log
+try:  # Supports both `python src/export_model.py` and package imports.
+    from .ml_utils import check_dependencies, log
+    from .score_extractor import FEATURE_NAMES, DEFAULT_SCORE_MEANING, DEFAULT_THRESHOLD
+except ImportError:  # pragma: no cover - direct-script compatibility
+    from ml_utils import check_dependencies, log
+    from score_extractor import FEATURE_NAMES, DEFAULT_SCORE_MEANING, DEFAULT_THRESHOLD
 
-# Check dependencies
-dependency_versions = check_dependencies()
-
-# Configuration
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ARTIFACTS_DIR = os.path.join(PROJECT_ROOT, "run_artifacts")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ARTIFACTS_DIR = PROJECT_ROOT / "run_artifacts"
 MODEL_VERSION = "v1.0.0"
+PACKAGE_PATH = ARTIFACTS_DIR / "model_package.joblib"
+METADATA_PATH = ARTIFACTS_DIR / "model_metadata.json"
 
-# Load the best model from training
-best_model_path = os.path.join(ARTIFACTS_DIR, "best_pipeline.joblib")
-if not os.path.exists(best_model_path):
-    raise FileNotFoundError(f"Best model not found at {best_model_path}. Run train_advanced.py first.")
 
-# Load the model
-best_model = joblib.load(best_model_path)
-log.info("Loaded best model from %s", best_model_path)
+def _select_source_artifact() -> Path:
+    """Prefer Task 12's calibrated package, with a documented baseline fallback."""
+    candidates = [
+        ARTIFACTS_DIR / "production_model_package.joblib",
+        ARTIFACTS_DIR / "best_pipeline.joblib",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        "No deployable model found. Run src/train_advanced.py before exporting the API package."
+    )
 
-# Feature names from our preprocessing pipeline
-NUMERIC_COLS = [
-    "exp_required_years", "salary_offered_inr",
-    "python_required", "sql_required", "ml_required",
-    "javascript_required", "data_structures_required", "statistics_required",
-    "years_experience", "python_score", "sql_score", "ml_score",
-    "javascript_score", "data_structures_score", "statistics_score",
-    "exam_time_seconds", "self_reported_confidence",
-    "retake_count", "expected_salary_inr",
-]
 
-CATEGORICAL_COLS = [
-    "company", "title", "location_job",
-    "edu_minimum", "education_level", "location_student",
-]
+def main() -> None:
+    dependency_versions = check_dependencies()
+    source_path = _select_source_artifact()
+    source_artifact = joblib.load(source_path)
 
-FEATURE_NAMES = NUMERIC_COLS + CATEGORICAL_COLS
+    if isinstance(source_artifact, dict) and "model" in source_artifact:
+        model = source_artifact["model"]
+        threshold = float(source_artifact.get("threshold", DEFAULT_THRESHOLD))
+        calibration_method = source_artifact.get("calibration_method")
+        cost_assumptions = source_artifact.get("cost_assumptions")
+    else:
+        model = source_artifact
+        threshold = DEFAULT_THRESHOLD
+        calibration_method = None
+        cost_assumptions = None
 
-# Export as versioned artifact
-artifact_path = os.path.join(ARTIFACTS_DIR, f"model_{MODEL_VERSION}.pkl")
-joblib.dump({
-    "model": best_model,
-    "model_version": MODEL_VERSION,
-    "feature_names": FEATURE_NAMES,
-    "score_meaning": "probability of good match between candidate and job",
-}, artifact_path)
-log.info("Model artifact written: %s", artifact_path)
+    package = {
+        "model": model,
+        "threshold": threshold,
+        "model_version": MODEL_VERSION,
+        "feature_names": FEATURE_NAMES,
+        "score_meaning": DEFAULT_SCORE_MEANING,
+    }
+    joblib.dump(package, PACKAGE_PATH)
 
-# Export metadata
-metadata = {
-    "model_version": MODEL_VERSION,
-    "feature_names": FEATURE_NAMES,
-    "score_meaning": "probability of good match between candidate and job",
-    "dependency_versions": dependency_versions,
-    "source_model": "best_pipeline.joblib",
-}
+    metadata = {
+        "model_version": MODEL_VERSION,
+        "feature_names": FEATURE_NAMES,
+        "score_meaning": DEFAULT_SCORE_MEANING,
+        "threshold": threshold,
+        "source_model": source_path.name,
+        "calibration_method": calibration_method,
+        "cost_assumptions": cost_assumptions,
+        "dependency_versions": dependency_versions,
+    }
+    METADATA_PATH.write_text(json.dumps(metadata, indent=2, default=str), encoding="utf-8")
+    log.info("Model package written: %s", PACKAGE_PATH)
+    log.info("Model metadata written: %s", METADATA_PATH)
 
-metadata_path = os.path.join(ARTIFACTS_DIR, "model_metadata.json")
-with open(metadata_path, "w") as f:
-    json.dump(metadata, f, indent=2, default=str)
-log.info("Model metadata written: %s", metadata_path)
 
-print(f"\nModel exported successfully!")
-print(f"Artifact: {artifact_path}")
-print(f"Metadata: {metadata_path}")
-print(f"Model version: {MODEL_VERSION}")
-print(f"Features: {len(FEATURE_NAMES)}")
+if __name__ == "__main__":
+    main()
